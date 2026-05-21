@@ -1,0 +1,80 @@
+import json
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from src.answer_utils import normalize_answer
+
+
+def load_jsonl(path: Path) -> list[dict]:
+    with path.open("r", encoding="utf-8") as f:
+        return [json.loads(line) for line in f]
+
+
+def summarize(path: Path) -> dict:
+    rows = load_jsonl(path)
+    n = len(rows)
+
+    corrected = 0
+    old_correct = 0
+    changed = []
+
+    for row in rows:
+        old = bool(row["correct"])
+        new = normalize_answer(row["prediction"]) == normalize_answer(row["gold"])
+
+        old_correct += int(old)
+        corrected += int(new)
+
+        if old != new:
+            changed.append(
+                {
+                    "id": row["id"],
+                    "gold": row["gold"],
+                    "prediction": row["prediction"],
+                    "old_correct": old,
+                    "new_correct": new,
+                }
+            )
+
+    return {
+        "file": str(path),
+        "examples": n,
+        "old_exact_match": old_correct / n,
+        "new_exact_match": corrected / n,
+        "format_rate": sum(row["format_ok"] for row in rows) / n,
+        "avg_latency_sec": sum(row["latency"] for row in rows) / n,
+        "avg_output_tokens": sum(row["output_tokens"] for row in rows) / n,
+        "changed": changed,
+    }
+
+
+def main() -> None:
+    if len(sys.argv) < 2:
+        raise SystemExit("Usage: python scripts/recompute_eval_metrics.py <eval_jsonl> ...")
+
+    summaries = [summarize(Path(arg)) for arg in sys.argv[1:]]
+
+    print("| file | examples | old_exact_match | new_exact_match | changed | format_rate | avg_output_tokens |")
+    print("|---|---:|---:|---:|---:|---:|---:|")
+    for item in summaries:
+        print(
+            f"| {item['file']} | {item['examples']} | "
+            f"{item['old_exact_match']:.4f} | {item['new_exact_match']:.4f} | "
+            f"{len(item['changed'])} | {item['format_rate']:.4f} | {item['avg_output_tokens']:.1f} |"
+        )
+
+    print("=" * 80)
+    print("Changed examples:")
+    for item in summaries:
+        if not item["changed"]:
+            continue
+        print(f"File: {item['file']}")
+        for row in item["changed"][:10]:
+            print(row)
+
+
+if __name__ == "__main__":
+    main()
