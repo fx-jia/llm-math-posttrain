@@ -1,3 +1,5 @@
+"""在 SFT LoRA 适配器上使用偏好对数据继续进行 DPO 训练。"""
+
 import argparse
 import inspect
 import json
@@ -19,6 +21,7 @@ SFT_ADAPTER_DIR = os.environ.get("SFT_ADAPTER_DIR", str(ROOT / "outputs" / "sft_
 
 
 def load_jsonl(path: Path, limit: int | None = None) -> list[dict]:
+    """读取 DPO 所需的 prompt/chosen/rejected 三元组。"""
     rows = []
     with path.open("r", encoding="utf-8") as f:
         for line in f:
@@ -36,6 +39,7 @@ def load_jsonl(path: Path, limit: int | None = None) -> list[dict]:
 
 
 def build_dpo_config(output_dir: Path, args: argparse.Namespace) -> DPOConfig:
+    """构建与当前 TRL 版本兼容的 DPO 配置。"""
     candidate_kwargs = {
         "output_dir": str(output_dir),
         "num_train_epochs": args.epochs,
@@ -54,6 +58,7 @@ def build_dpo_config(output_dir: Path, args: argparse.Namespace) -> DPOConfig:
         "max_prompt_length": args.max_prompt_length,
     }
 
+    # TRL 各版本的配置参数有差异，运行时过滤可避免因升降级而报错。
     signature = inspect.signature(DPOConfig.__init__)
     supported_kwargs = {
         key: value
@@ -68,6 +73,7 @@ def build_dpo_config(output_dir: Path, args: argparse.Namespace) -> DPOConfig:
 
 
 def main() -> None:
+    """加载策略/参考模型，并在偏好对上优化 LoRA 参数。"""
     parser = argparse.ArgumentParser()
     parser.add_argument("--train-limit", type=int, default=200)
     parser.add_argument("--output-dir", type=str, default="outputs/dpo_smoke")
@@ -104,6 +110,7 @@ def main() -> None:
         trust_remote_code=True,
     )
     ref_base.config.use_cache = False
+    # 参考模型固定在 SFT 起点，用于约束策略不要偏离过快。
     ref_model = PeftModel.from_pretrained(ref_base, SFT_ADAPTER_DIR, is_trainable=False)
     ref_model.eval()
 
@@ -120,6 +127,7 @@ def main() -> None:
         "train_dataset": dataset,
     }
 
+    # processing_class 是新版 TRL 命名，旧版仍使用 tokenizer。
     trainer_signature = inspect.signature(DPOTrainer.__init__)
     if "processing_class" in trainer_signature.parameters:
         trainer_kwargs["processing_class"] = tokenizer

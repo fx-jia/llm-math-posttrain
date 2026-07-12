@@ -1,3 +1,5 @@
+"""使用 GSM8K 推理文本对因果语言模型进行 LoRA 监督微调。"""
+
 import argparse
 import json
 import os
@@ -21,6 +23,7 @@ MODEL_NAME = os.environ.get("MODEL_NAME", "Qwen/Qwen2.5-1.5B")
 
 
 def load_jsonl(path: Path, limit: int | None = None) -> list[dict]:
+    """按顺序读取 JSONL；limit 用于快速烟雾测试。"""
     rows = []
     with path.open("r", encoding="utf-8") as f:
         for line in f:
@@ -31,6 +34,7 @@ def load_jsonl(path: Path, limit: int | None = None) -> list[dict]:
 
 
 def main() -> None:
+    """构建 LoRA 模型、分词数据并启动 SFT 训练。"""
     parser = argparse.ArgumentParser()
     parser.add_argument("--train-limit", type=int, default=256)
     parser.add_argument("--output-dir", type=str, default="outputs/sft_smoke")
@@ -54,6 +58,7 @@ def main() -> None:
         trust_remote_code=True,
     )
 
+    # 同时适配注意力与 MLP 线性层，以少量参数覆盖主要变换路径。
     lora_config = LoraConfig(
         r=8,
         lora_alpha=16,
@@ -77,6 +82,7 @@ def main() -> None:
     dataset = Dataset.from_list([{"text": row["sft_text"]} for row in rows])
 
     def tokenize_fn(batch):
+        """仅做截断；动态 padding 交给 collator，减少无效计算。"""
         return tokenizer(
             batch["text"],
             truncation=True,
@@ -91,6 +97,7 @@ def main() -> None:
         desc="Tokenizing",
     )
 
+    # 因果语言建模中，label 由 input_ids 复制得到，不使用 MLM 遮盖。
     collator = DataCollatorForLanguageModeling(
         tokenizer=tokenizer,
         mlm=False,

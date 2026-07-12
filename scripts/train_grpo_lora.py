@@ -1,3 +1,5 @@
+"""从 SFT LoRA 起点出发，使用可验证数学奖励进行 GRPO 训练。"""
+
 import argparse
 import inspect
 import json
@@ -24,6 +26,7 @@ SFT_ADAPTER_DIR = os.environ.get("SFT_ADAPTER_DIR", str(ROOT / "outputs" / "sft_
 
 
 def load_jsonl(path: Path, limit: int | None = None) -> list[dict]:
+    """读取 GRPO 需要的题目 prompt 和标准答案。"""
     rows = []
     with path.open("r", encoding="utf-8") as f:
         for line in f:
@@ -40,6 +43,7 @@ def load_jsonl(path: Path, limit: int | None = None) -> list[dict]:
 
 
 def build_grpo_config(output_dir: Path, args: argparse.Namespace) -> GRPOConfig:
+    """构建配置，并过滤当前 TRL 版本不支持的参数。"""
     candidate_kwargs = {
         "output_dir": str(output_dir),
         "max_steps": args.max_steps,
@@ -61,6 +65,7 @@ def build_grpo_config(output_dir: Path, args: argparse.Namespace) -> GRPOConfig:
         "beta": args.beta,
     }
 
+    # 通过反射兼容 TRL API 变化，同时打印被忽略项以防静默失配。
     signature = inspect.signature(GRPOConfig.__init__)
     supported_kwargs = {
         key: value
@@ -75,6 +80,7 @@ def build_grpo_config(output_dir: Path, args: argparse.Namespace) -> GRPOConfig:
 
 
 def main() -> None:
+    """构建可训练策略模型，按组采样回答并用规则奖励优化。"""
     parser = argparse.ArgumentParser()
     parser.add_argument("--train-limit", type=int, default=64)
     parser.add_argument("--output-dir", type=str, default="outputs/grpo_smoke")
@@ -117,6 +123,7 @@ def main() -> None:
 
     grpo_args = build_grpo_config(output_dir, args)
 
+    # 正确性是主奖励；格式和长度奖励用来塑造稳定、简洁的输出。
     trainer_kwargs = {
         "model": model,
         "reward_funcs": [correctness_reward, format_reward, length_reward],
@@ -124,6 +131,7 @@ def main() -> None:
         "train_dataset": dataset,
     }
 
+    # 同时支持新版 processing_class 和旧版 tokenizer 接口。
     trainer_signature = inspect.signature(GRPOTrainer.__init__)
     if "processing_class" in trainer_signature.parameters:
         trainer_kwargs["processing_class"] = tokenizer

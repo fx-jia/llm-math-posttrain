@@ -1,7 +1,10 @@
+"""GRPO 训练使用的输出解析与奖励函数。"""
+
 import re
 
 
 def completion_to_text(completion) -> str:
+    """将 TRL 不同版本可能返回的 completion 结构统一为文本。"""
     if isinstance(completion, str):
         return completion
     if isinstance(completion, list):
@@ -18,6 +21,7 @@ def completion_to_text(completion) -> str:
 
 
 def normalize_answer(text: str) -> str:
+    """移除不影响数值语义的常见格式字符。"""
     text = str(text).strip()
     text = text.replace(",", "")
     text = text.replace("$", "")
@@ -26,6 +30,7 @@ def normalize_answer(text: str) -> str:
 
 
 def extract_final_answer(output: str) -> str:
+    """优先解析 ``Final Answer:`` 字段，否则回退到最后一个数字。"""
     output = completion_to_text(output)
     match = re.search(r"Final Answer:\s*([^\n]+)", output)
     if match:
@@ -41,6 +46,7 @@ def extract_final_answer(output: str) -> str:
 
 
 def correctness_reward(completions, answer=None, **kwargs):
+    """按最终答案是否与标准答案完全一致返回 0/1 奖励。"""
     rewards = []
     answers = answer if answer is not None else kwargs.get("answers")
 
@@ -53,6 +59,7 @@ def correctness_reward(completions, answer=None, **kwargs):
 
 
 def format_reward(completions, **kwargs):
+    """鼓励模型显式使用 ``Final Answer:`` 标记最终答案。"""
     rewards = []
     for completion in completions:
         text = completion_to_text(completion)
@@ -61,6 +68,7 @@ def format_reward(completions, **kwargs):
 
 
 def length_reward(completions, max_words=180, **kwargs):
+    """对过长回答施加轻微惩罚，抑制不必要的冗长推理。"""
     rewards = []
     for completion in completions:
         text = completion_to_text(completion)
@@ -70,6 +78,7 @@ def length_reward(completions, max_words=180, **kwargs):
 
 
 def combined_reward(completions, answer=None, **kwargs):
+    """将正确性、输出格式和长度三项奖励逐样本相加。"""
     c = correctness_reward(completions, answer=answer, **kwargs)
     f = format_reward(completions, **kwargs)
     l = length_reward(completions, **kwargs)
