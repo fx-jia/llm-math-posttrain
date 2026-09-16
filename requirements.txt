@@ -1,0 +1,9 @@
+# Minimum versions required by the V2 stable RLVR recipe.
+# Every run also records the exact installed versions in a manifest.
+torch>=2.5
+transformers>=4.56
+datasets>=3.2
+accelerate>=1.2
+peft>=0.15
+trl>=0.24
+safetensors>=0.5

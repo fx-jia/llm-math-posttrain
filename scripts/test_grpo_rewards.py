@@ -29,3 +29,6 @@ print("correctness_reward:", correctness_reward(completions, answer=answers))
 print("format_reward:", format_reward(completions))
 print("length_reward:", length_reward(completions))
 print("combined_reward:", combined_reward(completions, answer=answers))
+
+# Train-time reward and eval-time verifier share the same decimal semantics.
+assert correctness_reward(["Final Answer: 26.00"], answer=["26"]) == [1.0]

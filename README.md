@@ -1,114 +1,231 @@
-# LLM Math Post-training
+# LLM Math Post-training V2
 
-这是一个面向小型语言模型数学推理能力的后训练实验项目。项目以 GSM8K 为数据集，使用 LoRA 依次实验 SFT、DPO 和 GRPO/RLVR，并与未微调的基础模型进行对比。
+面向小型语言模型数学推理的可复现后训练实验。项目不再只验证 SFT、DPO、GRPO
+能否运行，而是研究：在固定训练与 rollout 预算下，经过统一验证、难度筛选的后训练，
+是否能稳定超过 response-only SFT。
 
-## 项目目标
+## V2 的关键变化
 
-- 搭建可重复的数学推理后训练流程。
-- 对比 Base、SFT、DPO 和 GRPO 的效果。
-- 使用答案正确性、格式合规率、输出长度、推理延迟和显存占用进行评估。
+- 单一数学验证器：数据筛选、DPO 标签、RLVR reward 和评测共用
+  `src/math_verifier.py`，支持整数、小数、分数、百分数、科学计数法和 `\boxed{}`。
+- Response-only SFT：prompt token 的 label 为 `-100`，不再把复述指令计入训练目标；超长样本被显式丢弃并统计。
+- 同策略偏好数据：每题采样多个候选，从同一 SFT policy 中选择正确/错误回答，并按 token 长度匹配，减少 DPO 风格捷径。
+- 一次 rollout 生成三类训练集：verified RFT 正样本、DPO hard pairs、RLVR policy-frontier prompts。
+- 稳定 RLVR：默认 correctness-only reward、frontier 数据、DAPO loss、非对称 clip、关闭 reward std scaling，并屏蔽截断 completion。
+- 可信评测：完整测试集、固定 seed、Wilson 95% 区间、exact McNemar 配对检验、pass@k 和 majority@k。
+- 每个新训练/评测输出都会保存 run manifest，记录 git commit、参数和关键依赖版本。
 
-## 整体流程
+## 研究流程
 
 ```text
-GSM8K 原始数据
-    ↓ prepare_gsm8k.py
-训练集 / 测试集
-    ├─→ train_sft_lora.py ─→ SFT LoRA
-    │       ├─→ build_dpo_pairs.py ─→ train_dpo_lora.py ─→ DPO LoRA
-    │       └─→ prepare_grpo_data.py ─→ train_grpo_lora.py ─→ GRPO LoRA
-    └─→ eval_base.py / eval_lora.py ─→ 评测结果与对比分析
+GSM8K
+  │
+  ├─ response-only SFT
+  │      │
+  │      └─ K-way policy rollouts + shared verifier
+  │             ├─ verified correct ──→ RFT
+  │             ├─ correct/wrong, length matched ──→ DPO
+  │             └─ 0 < pass@K < 1 ──→ GRPO / Dr.GRPO / DAPO
+  │
+  └─ full greedy eval + sampling eval + paired statistics
 ```
 
-## 目录与文件说明
+核心实验矩阵见 `configs/experiment_matrix_v2.yaml`，研究主张、控制变量和验收标准见
+`notes/upgrade_v2.md`。
 
-### `src/`
-
-| 文件 | 功能 |
-|---|---|
-| `src/__init__.py` | 将 `src` 标记为 Python 包。 |
-| `src/answer_utils.py` | 答案归一化工具。提取文本中最后的数值，消除货币符号、千分位、小数末尾零等表示差异，供评测脚本使用。 |
-| `src/rewards.py` | GRPO 奖励函数。包含最终答案提取、正确性奖励、`Final Answer:` 格式奖励、过长输出惩罚及组合奖励。 |
-
-### `scripts/`
-
-#### 数据准备与检查
-
-| 文件 | 功能 |
-|---|---|
-| `scripts/prepare_gsm8k.py` | 下载并转换 GSM8K，从原始答案中分离推理过程和最终答案，生成训练、测试 JSONL 文件，并校验输出。 |
-| `scripts/inspect_gsm8k.py` | 统计处理后 GSM8K 的样本数、长度和答案格式，同时打印样例用于人工检查。 |
-| `scripts/prepare_grpo_data.py` | 把 GSM8K 训练数据转成 GRPOTrainer 需要的 `prompt` 和 `answer` 格式。 |
-| `scripts/build_dpo_pairs.py` | 用 SFT 模型采样回答，保留格式正确但答案错误的结果作为 rejected，与标准推理 chosen 组成 DPO 偏好对。 |
-| `scripts/inspect_dpo_pairs.py` | 检查 DPO 偏好对数量、chosen/rejected 长度、格式合规率和样例内容。 |
-
-#### 模型训练
-
-| 文件 | 功能 |
-|---|---|
-| `scripts/train_sft_lora.py` | 使用标准推理文本进行 LoRA 监督微调，适配注意力层和 MLP 层。 |
-| `scripts/train_dpo_lora.py` | 从 SFT 适配器启动 DPO 训练。分别加载可训练的策略模型和冻结的参考模型，学习 chosen/rejected 偏好。 |
-| `scripts/train_grpo_lora.py` | 从 SFT 适配器启动 GRPO 训练，用答案正确性、输出格式和长度作为可验证奖励。 |
-| `scripts/check_lora_adapter.py` | 检查 LoRA 输出目录是否包含配置和权重，并打印 rank、alpha、目标层及权重大小。 |
-
-#### 评测与分析
-
-| 文件 | 功能 |
-|---|---|
-| `scripts/smoke_test_model.py` | 加载基础模型并完成一道数学题的生成，用于快速检查环境、模型和 GPU。 |
-| `scripts/eval_base.py` | 在 GSM8K 测试集上评估未微调模型，记录 Exact Match、格式合规率、延迟、输出 token 数和完整生成内容。 |
-| `scripts/eval_lora.py` | 加载指定 LoRA 适配器进行与基础模型相同的评测。 |
-| `scripts/summarize_eval.py` | 汇总一个或多个评测 JSONL，以 Markdown 表格输出样本数、准确率、格式率、延迟和平均长度。 |
-| `scripts/recompute_eval_metrics.py` | 使用当前答案归一化规则重算历史评测文件的指标，用于发现解析规则更新造成的指标变化。 |
-| `scripts/analyze_eval_diff.py` | 按样本 ID 比较两份评测结果，划分为均正确、A 对 B 错、A 错 B 对和均错误，并展示典型样例。 |
-| `scripts/test_answer_normalization.py` | 用若干边界样例检查答案归一化逻辑。 |
-| `scripts/test_grpo_rewards.py` | 手工构造 completion，检查 GRPO 答案提取与各项奖励计算。 |
-
-### 数据、输出与记录
-
-| 路径 | 功能 |
-|---|---|
-| `data/processed/gsm8k_train.jsonl` | 处理后的 GSM8K 训练集，包含题目、推理、答案和 SFT 文本。 |
-| `data/processed/gsm8k_test.jsonl` | 处理后的 GSM8K 测试集。 |
-| `data/processed/dpo_pairs_sft.jsonl` | 由 SFT 模型采样构建的 DPO 偏好对。 |
-| `data/processed/grpo_train.jsonl` | GRPO 训练数据，主要包含 prompt 和可验证答案。 |
-| `outputs/<run_name>/` | 训练产生的 LoRA 适配器、tokenizer 和训练配置。 |
-| `outputs/eval_*.jsonl` | 逐样本评测结果。 |
-| `logs/<run_name>/train.log` | 各次训练的终端日志。 |
-| `notes/experiment_log.md` | 实验命令、配置和结果记录。 |
-| `notes/report_v1.md` | 第一版实验报告与结果分析。 |
-
-`__pycache__/`、`.DS_Store` 和 `.git/` 是 Python、macOS 和 Git 自动生成的辅助文件，不属于项目业务逻辑。
-
-## 常用命令
+## 环境
 
 ```bash
-# 1. 准备并检查数据
+python -m pip install -r requirements.txt
+python -m unittest discover -v
+```
+
+默认模型是 `Qwen/Qwen2.5-1.5B`。可通过环境变量替换：
+
+```bash
+MODEL_NAME=/path/to/model python scripts/train_sft_lora.py --train-limit 256
+```
+
+当前稳定 RLVR recipe 需要支持 `loss_type=dapo`、`scale_rewards`、`epsilon_high`
+和 `mask_truncated_completions` 的新版 TRL。脚本发现版本不支持时会直接报错，避免静默降级。
+
+## 1. 数据准备
+
+```bash
 python scripts/prepare_gsm8k.py
+python scripts/prepare_gsm8k.py --check
 python scripts/inspect_gsm8k.py
-
-# 2. 进行小规模 SFT 烟雾训练
-python scripts/train_sft_lora.py --train-limit 256 --output-dir outputs/sft_smoke
-
-# 3. 评估基础模型与 LoRA 模型
-python scripts/eval_base.py --limit 20
-python scripts/eval_lora.py --adapter-dir outputs/sft_smoke --limit 20
-
-# 4. 汇总评测结果
-python scripts/summarize_eval.py outputs/eval_base_limit20.jsonl outputs/eval_sft_smoke_limit20.jsonl
-
-# 5. 运行轻量逻辑测试
-python scripts/test_answer_normalization.py
-python scripts/test_grpo_rewards.py
 ```
 
-## 默认模型与配置
-
-默认基础模型为 `Qwen/Qwen2.5-1.5B`，可通过环境变量替换：
+如果已有旧版 processed 数据，可离线创建 V2 split：
 
 ```bash
-MODEL_NAME=/path/to/model python scripts/eval_base.py --limit 20
-SFT_ADAPTER_DIR=/path/to/sft_adapter python scripts/train_dpo_lora.py
+python scripts/prepare_gsm8k.py --from-existing
 ```
 
-训练脚本默认使用 BF16 和自动设备映射，因此实际运行前需确保当前硬件和 PyTorch 环境支持相应配置。
+准备脚本使用 seed 42 从原训练集固定留出 256 条 dev，生成
+`gsm8k_train_core.jsonl`、`gsm8k_dev.jsonl` 和原始完整 train/test。所有 V2 训练默认使用
+`train_core`；test 只用于最终报告。
+
+## 2. Response-only SFT
+
+先做烟雾训练：
+
+```bash
+python scripts/train_sft_lora.py \
+  --train-limit 256 \
+  --output-dir outputs/sft_v2_smoke \
+  --seed 42
+```
+
+全量训练：
+
+```bash
+python scripts/train_sft_lora.py \
+  --train-limit 7217 \
+  --output-dir outputs/sft_v2_full \
+  --max-length 768 \
+  --seed 42
+```
+
+## 3. 一次 rollout 构建 RFT、DPO 与 RLVR 数据
+
+```bash
+SFT_ADAPTER_DIR=outputs/sft_v2_full python scripts/build_dpo_pairs.py \
+  --input-limit 2000 \
+  --num-candidates 8 \
+  --max-pairs 1000 \
+  --seed 42
+```
+
+输出文件：
+
+| 文件 | 用途 |
+|---|---|
+| `data/processed/rft_correct_sft.jsonl` | 当前策略生成且验证正确的 RFT completion |
+| `data/processed/dpo_pairs_sft.jsonl` | 同策略、长度匹配的正确/错误偏好对 |
+| `data/processed/rlvr_frontier_sft.jsonl` | 组内同时出现正确和错误结果的 RLVR prompts |
+| `data/processed/rollout_stats_sft.jsonl` | 每题 pass rate、格式率和长度统计 |
+
+旧版 `dpo_pairs_sft.jsonl` 不是同策略 pair。DPO 训练默认拒绝旧格式，必须先重新构造，
+或显式使用 `--allow-legacy-pairs` 做历史复现。
+
+## 4. RFT 与 DPO 基线
+
+RFT 从同一个 SFT adapter 继续训练：
+
+```bash
+python scripts/train_sft_lora.py \
+  --train-path data/processed/rft_correct_sft.jsonl \
+  --init-adapter outputs/sft_v2_full \
+  --train-limit 1000 \
+  --learning-rate 1e-5 \
+  --output-dir outputs/rft_v2 \
+  --seed 42
+```
+
+DPO：
+
+```bash
+SFT_ADAPTER_DIR=outputs/sft_v2_full python scripts/train_dpo_lora.py \
+  --train-limit 1000 \
+  --output-dir outputs/dpo_v2 \
+  --seed 42
+```
+
+## 5. Difficulty-frontier RLVR
+
+默认使用 DAPO 风格 token-level loss，`epsilon_high=0.28`、不按组内标准差缩放 reward，
+且只使用答案正确性作为 reward。格式奖励不会再伪装成推理进步。
+
+```bash
+SFT_ADAPTER_DIR=outputs/sft_v2_full python scripts/train_grpo_lora.py \
+  --train-path data/processed/rlvr_frontier_sft.jsonl \
+  --train-limit 256 \
+  --max-steps 100 \
+  --num-generations 4 \
+  --loss-type dapo \
+  --output-dir outputs/rlvr_dapo_seed42 \
+  --seed 42
+```
+
+关键消融只修改 `--loss-type`：
+
+```bash
+--loss-type grpo
+--loss-type dr_grpo
+--loss-type dapo
+```
+
+训练时重点观察 `frac_reward_zero_std`、entropy、KL、clip ratio、completion clipped ratio
+和输出长度。frontier 数据只是 SFT 起点上的离线难度估计；长训练中策略能力边界会移动，后续应周期性重建该数据。
+
+日志诊断：
+
+```bash
+python scripts/summarize_rlvr_log.py logs/rlvr_dapo/train.log
+```
+
+诊断脚本会在零方差 step 超过 10% 或截断 completion 超过 5% 时给出告警。
+
+## 6. 评测
+
+不传 `--limit` 时默认评测完整 1,319 条测试集：
+
+```bash
+python scripts/eval_base.py --seed 42
+python scripts/eval_lora.py --adapter-dir outputs/sft_v2_full --seed 42
+python scripts/eval_lora.py --adapter-dir outputs/dpo_v2 --seed 42
+python scripts/eval_lora.py --adapter-dir outputs/rlvr_dapo_seed42 --seed 42
+```
+
+训练过程中应使用 dev 选择 checkpoint：
+
+```bash
+python scripts/eval_lora.py \
+  --adapter-dir outputs/rlvr_dapo_seed42/checkpoint-50 \
+  --data-path data/processed/gsm8k_dev.jsonl \
+  --seed 42
+```
+
+小样本调试会按 seed 随机抽样，不再固定取前 N 条：
+
+```bash
+python scripts/eval_lora.py --adapter-dir outputs/sft_v2_full --limit 100 --seed 42
+```
+
+采样评测：
+
+```bash
+python scripts/eval_sampling.py \
+  --adapter-dir outputs/rlvr_dapo_seed42 \
+  --limit 100 \
+  --num-samples 8 \
+  --pass-k 1 4 8 \
+  --seed 42
+```
+
+汇总与配对比较：
+
+```bash
+python scripts/summarize_eval.py \
+  outputs/eval_sft_v2_full_gsm8k_test_full.jsonl \
+  outputs/eval_rlvr_dapo_seed42_gsm8k_test_full.jsonl
+python scripts/analyze_eval_diff.py \
+  outputs/eval_sft_v2_full_gsm8k_test_full.jsonl \
+  outputs/eval_rlvr_dapo_seed42_gsm8k_test_full.jsonl \
+  --name-a SFT --name-b DAPO
+```
+
+`summarize_eval.py` 会输出 accuracy 的 Wilson 95% 区间和 tokens/correct；
+`analyze_eval_diff.py` 会输出 exact McNemar p-value。
+
+## V1 结果应如何理解
+
+旧版前 100 条结果为 Base 51%、SFT 68%、DPO 69%、GRPO 62%。逐样本比较显示：
+
+- DPO 相比 SFT 是 5 题变对、4 题变错，exact McNemar `p=1.0`，不能据此声称 DPO 有效。
+- GRPO 相比 SFT 是 0 题改善、6 题退化。
+- GRPO 的 20 个 step 中有 9 个 step 组内 reward 方差为零。
+
+这些文件保留为历史结果，但 V2 的算法结论必须在新 verifier、新数据构造和完整评测上重新获得。

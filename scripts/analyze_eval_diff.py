@@ -1,6 +1,12 @@
 import argparse
 import json
+import sys
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from src.statistics import exact_mcnemar_p
 
 
 def load_jsonl(path: Path) -> dict[str, dict]:
@@ -61,6 +67,10 @@ def main() -> None:
     print(f"{args.name_a}_correct_{args.name_b}_wrong: {len(a_correct_b_wrong)}")
     print(f"{args.name_a}_wrong_{args.name_b}_correct: {len(a_wrong_b_correct)}")
     print(f"both_wrong: {len(both_wrong)}")
+    print(
+        "exact_mcnemar_p: "
+        f"{exact_mcnemar_p(len(a_correct_b_wrong), len(a_wrong_b_correct)):.6f}"
+    )
 
     avg_tokens_a = sum(a[i]["output_tokens"] for i in common_ids) / n
     avg_tokens_b = sum(b[i]["output_tokens"] for i in common_ids) / n

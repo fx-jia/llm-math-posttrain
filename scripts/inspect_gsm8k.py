@@ -5,6 +5,8 @@ from statistics import mean, median
 
 ROOT = Path(__file__).resolve().parents[1]
 TRAIN_PATH = ROOT / "data" / "processed" / "gsm8k_train.jsonl"
+TRAIN_CORE_PATH = ROOT / "data" / "processed" / "gsm8k_train_core.jsonl"
+DEV_PATH = ROOT / "data" / "processed" / "gsm8k_dev.jsonl"
 TEST_PATH = ROOT / "data" / "processed" / "gsm8k_test.jsonl"
 
 
@@ -57,9 +59,14 @@ def show_samples(rows: list[dict], n: int = 2) -> None:
 
 def main() -> None:
     train_rows = load_jsonl(TRAIN_PATH)
+    train_core_rows = load_jsonl(TRAIN_CORE_PATH) if TRAIN_CORE_PATH.exists() else train_rows
+    dev_rows = load_jsonl(DEV_PATH) if DEV_PATH.exists() else []
     test_rows = load_jsonl(TEST_PATH)
 
     describe_split("train", train_rows)
+    describe_split("train_core", train_core_rows)
+    if dev_rows:
+        describe_split("dev", dev_rows)
     describe_split("test", test_rows)
     show_samples(train_rows, n=2)
 

@@ -5,7 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.answer_utils import normalize_answer
+from src.math_verifier import answers_equivalent
 
 
 def load_jsonl(path: Path) -> list[dict]:
@@ -23,7 +23,7 @@ def summarize(path: Path) -> dict:
 
     for row in rows:
         old = bool(row["correct"])
-        new = normalize_answer(row["prediction"]) == normalize_answer(row["gold"])
+        new = answers_equivalent(row["prediction"], row["gold"])
 
         old_correct += int(old)
         corrected += int(new)

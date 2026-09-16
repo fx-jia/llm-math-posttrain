@@ -1,0 +1,33 @@
+# Compute-matched experiment matrix. Commands remain explicit in README.md.
+shared:
+  model_name: Qwen/Qwen2.5-1.5B
+  seeds: [42, 43, 44]
+  max_length: 768
+  evaluation: [greedy_pass_at_1, sampling_pass_at_k, majority_at_k]
+
+experiments:
+  - id: sft_response_only
+    objective: response_only_causal_lm
+    data: gsm8k_train_core
+  - id: rft_verified
+    objective: response_only_causal_lm
+    data: same_policy_verified_correct
+  - id: dpo_hard_pairs
+    objective: dpo
+    data: same_policy_length_matched_pairs
+  - id: rlvr_grpo
+    objective: grpo
+    data: policy_frontier
+    loss_type: grpo
+  - id: rlvr_dr_grpo
+    objective: grpo
+    data: policy_frontier
+    loss_type: dr_grpo
+  - id: rlvr_dapo
+    objective: grpo
+    data: policy_frontier
+    loss_type: dapo
+    scale_rewards: none
+    epsilon: 0.2
+    epsilon_high: 0.28
+    mask_truncated_completions: true

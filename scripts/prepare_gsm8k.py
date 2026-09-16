@@ -1,12 +1,14 @@
 import argparse
 import json
-import re
+import random
+import sys
 from pathlib import Path
 
-from datasets import load_dataset
-
-
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from src.prompts import build_sft_text
+
 PROCESSED_DIR = ROOT / "data" / "processed"
 
 
@@ -24,17 +26,6 @@ def extract_reasoning(raw_answer: str) -> str:
     if "####" not in raw_answer:
         return raw_answer.strip()
     return raw_answer.split("####")[0].strip()
-
-
-def build_sft_text(question: str, reasoning: str, answer: str) -> str:
-    """Build a stable instruction format for supervised fine-tuning."""
-    return (
-        "You are a helpful math reasoning assistant.\n"
-        "Solve the following problem step by step, and put the final answer after 'Final Answer:'.\n\n"
-        f"Problem:\n{question.strip()}\n\n"
-        f"Solution:\n{reasoning.strip()}\n"
-        f"Final Answer: {answer.strip()}"
-    )
 
 
 def convert_split(split_name: str, records) -> list[dict]:
@@ -75,16 +66,25 @@ def load_jsonl(path: Path) -> list[dict]:
 
 def check_outputs() -> None:
     train_path = PROCESSED_DIR / "gsm8k_train.jsonl"
+    train_core_path = PROCESSED_DIR / "gsm8k_train_core.jsonl"
+    dev_path = PROCESSED_DIR / "gsm8k_dev.jsonl"
     test_path = PROCESSED_DIR / "gsm8k_test.jsonl"
 
-    assert train_path.exists(), f"Missing {train_path}"
-    assert test_path.exists(), f"Missing {test_path}"
+    for path in (train_path, train_core_path, dev_path, test_path):
+        assert path.exists(), f"Missing {path}"
 
     train_rows = load_jsonl(train_path)
+    train_core_rows = load_jsonl(train_core_path)
+    dev_rows = load_jsonl(dev_path)
     test_rows = load_jsonl(test_path)
 
     required_keys = {"id", "source", "question", "reasoning", "answer", "sft_text"}
-    for name, rows in [("train", train_rows), ("test", test_rows)]:
+    for name, rows in [
+        ("train", train_rows),
+        ("train_core", train_core_rows),
+        ("dev", dev_rows),
+        ("test", test_rows),
+    ]:
         assert rows, f"{name} split is empty"
         for row in rows[:20]:
             assert required_keys.issubset(row.keys()), row.keys()
@@ -93,6 +93,8 @@ def check_outputs() -> None:
 
     print(f"Check passed.")
     print(f"train examples: {len(train_rows)}")
+    print(f"train core examples: {len(train_core_rows)}")
+    print(f"dev examples: {len(dev_rows)}")
     print(f"test examples: {len(test_rows)}")
     print("sample question:", train_rows[0]["question"][:120].replace("\n", " "))
     print("sample answer:", train_rows[0]["answer"])
@@ -101,21 +103,45 @@ def check_outputs() -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true")
+    parser.add_argument(
+        "--from-existing",
+        action="store_true",
+        help="Create the V2 train/dev split from existing processed JSONL without downloading.",
+    )
+    parser.add_argument("--dev-size", type=int, default=256)
+    parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
     if args.check:
         check_outputs()
         return
 
-    dataset = load_dataset("openai/gsm8k", "main")
+    if args.from_existing:
+        train_rows = load_jsonl(PROCESSED_DIR / "gsm8k_train.jsonl")
+        test_rows = load_jsonl(PROCESSED_DIR / "gsm8k_test.jsonl")
+    else:
+        from datasets import load_dataset
 
-    train_rows = convert_split("train", dataset["train"])
-    test_rows = convert_split("test", dataset["test"])
+        dataset = load_dataset("openai/gsm8k", "main")
+        train_rows = convert_split("train", dataset["train"])
+        test_rows = convert_split("test", dataset["test"])
+
+    if not 0 < args.dev_size < len(train_rows):
+        raise ValueError("--dev-size must be between 1 and the number of training examples - 1")
+    shuffled_indices = list(range(len(train_rows)))
+    random.Random(args.seed).shuffle(shuffled_indices)
+    dev_indices = set(shuffled_indices[: args.dev_size])
+    dev_rows = [row for index, row in enumerate(train_rows) if index in dev_indices]
+    train_core_rows = [row for index, row in enumerate(train_rows) if index not in dev_indices]
 
     save_jsonl(PROCESSED_DIR / "gsm8k_train.jsonl", train_rows)
+    save_jsonl(PROCESSED_DIR / "gsm8k_train_core.jsonl", train_core_rows)
+    save_jsonl(PROCESSED_DIR / "gsm8k_dev.jsonl", dev_rows)
     save_jsonl(PROCESSED_DIR / "gsm8k_test.jsonl", test_rows)
 
     print(f"Saved train examples: {len(train_rows)}")
+    print(f"Saved train core examples: {len(train_core_rows)}")
+    print(f"Saved dev examples: {len(dev_rows)} (seed={args.seed})")
     print(f"Saved test examples: {len(test_rows)}")
     print(f"Output directory: {PROCESSED_DIR}")
 

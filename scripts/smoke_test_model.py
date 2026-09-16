@@ -1,11 +1,17 @@
 import os
+import sys
 import time
+from pathlib import Path
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
 MODEL_NAME = os.environ.get("MODEL_NAME", "Qwen/Qwen2.5-1.5B")
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from src.prompts import build_math_prompt
 
 
 def main() -> None:
@@ -29,18 +35,16 @@ def main() -> None:
     print(f"model device: {next(model.parameters()).device}")
     print(f"model dtype: {next(model.parameters()).dtype}")
 
-    prompt = (
-        "You are a helpful math reasoning assistant.\n"
-        "Solve the following problem step by step, and put the final answer after 'Final Answer:'.\n\n"
-        "Problem:\n"
+    prompt = build_math_prompt(
         "Natalia sold clips to 48 of her friends in April, and then she sold half as many clips in May. "
-        "How many clips did Natalia sell altogether in April and May?\n\n"
-        "Solution:\n"
+        "How many clips did Natalia sell altogether in April and May?"
     )
 
     inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
 
-    start = time.time()
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    start = time.perf_counter()
     with torch.no_grad():
         output_ids = model.generate(
             **inputs,
@@ -50,7 +54,9 @@ def main() -> None:
             top_p=None,
             pad_token_id=tokenizer.eos_token_id,
         )
-    elapsed = time.time() - start
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    elapsed = time.perf_counter() - start
 
     generated = tokenizer.decode(
         output_ids[0][inputs["input_ids"].shape[1]:],

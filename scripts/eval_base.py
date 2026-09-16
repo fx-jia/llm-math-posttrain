@@ -1,19 +1,26 @@
 import argparse
 import json
 import os
-import re
+import random
 import sys
 import time
 from pathlib import Path
 
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, set_seed
 
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.answer_utils import normalize_answer
+from src.math_verifier import (
+    answers_equivalent,
+    extract_final_answer,
+    has_required_format,
+    normalize_answer,
+)
+from src.prompts import build_math_prompt
+from src.run_manifest import write_manifest
 TEST_PATH = ROOT / "data" / "processed" / "gsm8k_test.jsonl"
 OUTPUT_DIR = ROOT / "outputs"
 
@@ -25,40 +32,28 @@ def load_jsonl(path: Path) -> list[dict]:
         return [json.loads(line) for line in f]
 
 
-def extract_final_answer(output: str) -> str:
-    # Prefer the explicit format we ask the model to use.
-    match = re.search(r"Final Answer:\s*([^\n]+)", output)
-    if match:
-        candidate = match.group(1).strip()
-    else:
-        # Fallback: use the last number in the generation.
-        numbers = re.findall(r"-?\d+(?:\.\d+)?", output.replace(",", ""))
-        candidate = numbers[-1] if numbers else ""
-
-    numbers = re.findall(r"-?\d+(?:\.\d+)?", candidate.replace(",", ""))
-    if numbers:
-        return normalize_answer(numbers[-1])
-    return normalize_answer(candidate)
-
-
-def build_prompt(question: str) -> str:
-    return (
-        "You are a helpful math reasoning assistant.\n"
-        "Solve the following problem step by step, and put the final answer after 'Final Answer:'.\n\n"
-        f"Problem:\n{question.strip()}\n\n"
-        "Solution:\n"
-    )
-
-
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--limit", type=int, default=20)
+    parser.add_argument("--data-path", default=str(TEST_PATH.relative_to(ROOT)))
+    parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--max-new-tokens", type=int, default=256)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--shuffle", action=argparse.BooleanOptionalAction, default=True)
     args = parser.parse_args()
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    rows = load_jsonl(TEST_PATH)[: args.limit]
+    data_path = Path(args.data_path)
+    if not data_path.is_absolute():
+        data_path = ROOT / data_path
+    rows = load_jsonl(data_path)
+    if args.shuffle:
+        random.Random(args.seed).shuffle(rows)
+    if args.limit is not None:
+        rows = rows[: args.limit]
+    if not rows:
+        raise ValueError("No evaluation examples selected.")
+    set_seed(args.seed)
 
     print(f"Loading model: {MODEL_NAME}")
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
@@ -70,7 +65,17 @@ def main() -> None:
     )
     model.eval()
 
-    result_path = OUTPUT_DIR / f"eval_base_limit{args.limit}.jsonl"
+    subset_name = f"limit{args.limit}_seed{args.seed}" if args.limit is not None else "full"
+    result_path = OUTPUT_DIR / f"eval_base_{data_path.stem}_{subset_name}.jsonl"
+    write_manifest(
+        result_path.with_suffix(".manifest.json"),
+        ROOT,
+        vars(args),
+        model_name=MODEL_NAME,
+        examples=len(rows),
+        decoding="greedy",
+        data_path=str(data_path),
+    )
 
     correct = 0
     format_ok = 0
@@ -79,10 +84,12 @@ def main() -> None:
 
     with result_path.open("w", encoding="utf-8") as f:
         for idx, row in enumerate(rows, start=1):
-            prompt = build_prompt(row["question"])
+            prompt = build_math_prompt(row["question"])
             inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
 
-            start = time.time()
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            start = time.perf_counter()
             with torch.no_grad():
                 output_ids = model.generate(
                     **inputs,
@@ -90,15 +97,17 @@ def main() -> None:
                     do_sample=False,
                     pad_token_id=tokenizer.eos_token_id,
                 )
-            latency = time.time() - start
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            latency = time.perf_counter() - start
 
             gen_ids = output_ids[0][inputs["input_ids"].shape[1]:]
             output = tokenizer.decode(gen_ids, skip_special_tokens=True)
-            pred = extract_final_answer(output)
+            pred = normalize_answer(extract_final_answer(output))
             gold = normalize_answer(row["answer"])
 
-            is_correct = pred == gold
-            has_format = "Final Answer:" in output
+            is_correct = answers_equivalent(output, row["answer"])
+            has_format = has_required_format(output)
 
             correct += int(is_correct)
             format_ok += int(has_format)

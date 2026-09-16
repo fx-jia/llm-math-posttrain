@@ -4,6 +4,8 @@ import argparse
 import inspect
 import json
 import os
+import random
+import sys
 from pathlib import Path
 
 import torch
@@ -14,13 +16,17 @@ from trl import DPOConfig, DPOTrainer
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from src.run_manifest import write_manifest
+
 DPO_PATH = ROOT / "data" / "processed" / "dpo_pairs_sft.jsonl"
 
 MODEL_NAME = os.environ.get("MODEL_NAME", "Qwen/Qwen2.5-1.5B")
 SFT_ADAPTER_DIR = os.environ.get("SFT_ADAPTER_DIR", str(ROOT / "outputs" / "sft_lora_r8_full"))
 
 
-def load_jsonl(path: Path, limit: int | None = None) -> list[dict]:
+def load_jsonl(path: Path) -> list[dict]:
     """读取 DPO 所需的 prompt/chosen/rejected 三元组。"""
     rows = []
     with path.open("r", encoding="utf-8") as f:
@@ -31,21 +37,20 @@ def load_jsonl(path: Path, limit: int | None = None) -> list[dict]:
                     "prompt": item["prompt"],
                     "chosen": item["chosen"],
                     "rejected": item["rejected"],
+                    "pair_source": item.get("source", "unknown"),
                 }
             )
-            if limit is not None and len(rows) >= limit:
-                break
     return rows
 
 
-def build_dpo_config(output_dir: Path, args: argparse.Namespace) -> DPOConfig:
+def build_dpo_config(output_dir: Path, args: argparse.Namespace) -> tuple[DPOConfig, list[str]]:
     """构建与当前 TRL 版本兼容的 DPO 配置。"""
     candidate_kwargs = {
         "output_dir": str(output_dir),
         "num_train_epochs": args.epochs,
         "per_device_train_batch_size": 1,
         "gradient_accumulation_steps": 8,
-        "learning_rate": 5e-6,
+        "learning_rate": args.learning_rate,
         "logging_steps": 5,
         "save_strategy": "epoch",
         "bf16": True,
@@ -53,9 +58,11 @@ def build_dpo_config(output_dir: Path, args: argparse.Namespace) -> DPOConfig:
         "report_to": "none",
         "remove_unused_columns": False,
         "optim": "adamw_torch",
-        "beta": 0.1,
+        "beta": args.beta,
         "max_length": args.max_length,
         "max_prompt_length": args.max_prompt_length,
+        "seed": args.seed,
+        "data_seed": args.seed,
     }
 
     # TRL 各版本的配置参数有差异，运行时过滤可避免因升降级而报错。
@@ -69,21 +76,53 @@ def build_dpo_config(output_dir: Path, args: argparse.Namespace) -> DPOConfig:
     if skipped:
         print("Skipped unsupported DPOConfig args:", skipped)
 
-    return DPOConfig(**supported_kwargs)
+    return DPOConfig(**supported_kwargs), skipped
 
 
 def main() -> None:
     """加载策略/参考模型，并在偏好对上优化 LoRA 参数。"""
     parser = argparse.ArgumentParser()
+    parser.add_argument("--train-path", default=str(DPO_PATH.relative_to(ROOT)))
     parser.add_argument("--train-limit", type=int, default=200)
     parser.add_argument("--output-dir", type=str, default="outputs/dpo_smoke")
     parser.add_argument("--epochs", type=float, default=1.0)
     parser.add_argument("--max-length", type=int, default=768)
     parser.add_argument("--max-prompt-length", type=int, default=384)
+    parser.add_argument("--learning-rate", type=float, default=5e-6)
+    parser.add_argument("--beta", type=float, default=0.1)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--shuffle", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--allow-legacy-pairs", action="store_true")
     args = parser.parse_args()
 
     output_dir = ROOT / args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    train_path = Path(args.train_path)
+    if not train_path.is_absolute():
+        train_path = ROOT / train_path
+    rows = load_jsonl(train_path)
+    if args.shuffle:
+        random.Random(args.seed).shuffle(rows)
+    if args.train_limit is not None:
+        rows = rows[: args.train_limit]
+    if not rows:
+        raise ValueError(f"No DPO pairs selected from {train_path}")
+    pair_sources = sorted({row["pair_source"] for row in rows})
+    if pair_sources != ["same_policy_verified_candidates"] and not args.allow_legacy_pairs:
+        raise ValueError(
+            "DPO data is not the V2 same-policy pair format. Rebuild it with "
+            "scripts/build_dpo_pairs.py or pass --allow-legacy-pairs. "
+            f"Found sources: {pair_sources}"
+        )
+    dataset = Dataset.from_list(
+        [
+            {"prompt": row["prompt"], "chosen": row["chosen"], "rejected": row["rejected"]}
+            for row in rows
+        ]
+    )
+    print(f"DPO train examples: {len(dataset)}")
+    dpo_args, skipped_config_args = build_dpo_config(output_dir, args)
 
     print(f"Loading tokenizer from SFT adapter: {SFT_ADAPTER_DIR}")
     tokenizer = AutoTokenizer.from_pretrained(SFT_ADAPTER_DIR, trust_remote_code=True)
@@ -114,11 +153,17 @@ def main() -> None:
     ref_model = PeftModel.from_pretrained(ref_base, SFT_ADAPTER_DIR, is_trainable=False)
     ref_model.eval()
 
-    rows = load_jsonl(DPO_PATH, limit=args.train_limit)
-    dataset = Dataset.from_list(rows)
-    print(f"DPO train examples: {len(dataset)}")
-
-    dpo_args = build_dpo_config(output_dir, args)
+    write_manifest(
+        output_dir / "run_manifest.json",
+        ROOT,
+        vars(args),
+        model_name=MODEL_NAME,
+        sft_adapter_dir=SFT_ADAPTER_DIR,
+        train_path=str(train_path),
+        train_examples=len(dataset),
+        pair_sources=pair_sources,
+        skipped_config_args=skipped_config_args,
+    )
 
     trainer_kwargs = {
         "model": model,
