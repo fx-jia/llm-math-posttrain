@@ -35,6 +35,12 @@ class MathVerifierTest(unittest.TestCase):
         self.assertTrue(has_required_format(r"\boxed{4}"))
         self.assertFalse(has_required_format("the answer is 4"))
 
+    def test_symbolic_expression_is_not_reduced_to_last_number(self):
+        self.assertFalse(answers_equivalent(r"Final Answer: \sqrt{3}", "3"))
+        self.assertTrue(
+            answers_equivalent(r"Final Answer: \sqrt{3}", r"\sqrt{3}")
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

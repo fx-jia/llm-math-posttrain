@@ -18,13 +18,14 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.rewards import correctness_reward, format_reward, length_reward
+from src.project_config import DEFAULT_BASE_MODEL
 from src.run_manifest import write_manifest
 
 
 GRPO_PATH = ROOT / "data" / "processed" / "grpo_train.jsonl"
 FRONTIER_PATH = ROOT / "data" / "processed" / "rlvr_frontier_sft.jsonl"
 
-MODEL_NAME = os.environ.get("MODEL_NAME", "Qwen/Qwen2.5-1.5B")
+MODEL_NAME = os.environ.get("MODEL_NAME", DEFAULT_BASE_MODEL)
 SFT_ADAPTER_DIR = os.environ.get("SFT_ADAPTER_DIR", str(ROOT / "outputs" / "sft_lora_r8_full"))
 
 

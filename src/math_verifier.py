@@ -154,13 +154,67 @@ def normalize_answer(text: str) -> str:
     return candidate.strip().rstrip(".").casefold()
 
 
+def _verification_candidate(text: str) -> str:
+    """Keep symbolic expressions intact while still extracting verbose outputs."""
+    output = completion_to_text(text).strip()
+    explicit = _FINAL_ANSWER_RE.findall(output)
+    if explicit:
+        candidate = explicit[-1].strip()
+        boxed = _boxed_contents(candidate)
+        return boxed[-1] if boxed else candidate
+    boxed = _boxed_contents(output)
+    if boxed:
+        return boxed[-1]
+    if re.search(r"\\(?:sqrt|pi|sin|cos|tan|log|ln|begin|left|right)\b", output):
+        return output
+    return extract_final_answer(output)
+
+
+def _plain_numeric_value(text: str) -> Fraction | None:
+    """Parse only candidates that are wholly numeric, avoiding symbolic traps."""
+    candidate = _normalize_latex_fraction(text).replace("$", "").replace("¥", "").strip()
+    candidate = candidate.replace(r"\%", "%")
+    numeric_pattern = rf"(?:{_FRACTION_RE.pattern}|{_NUMBER_RE.pattern})\s*%?"
+    if not re.fullmatch(numeric_pattern, candidate):
+        return None
+    return parse_numeric_answer(candidate)
+
+
+def _math_verify_equivalent(prediction: str, reference: str) -> bool:
+    """Use Math-Verify when installed; retain a dependency-free fallback."""
+    try:
+        from math_verify import parse, verify
+    except ImportError:
+        return False
+
+    def prepare(value: str) -> str:
+        value = value.strip()
+        if "\\" in value and "$" not in value:
+            return f"${value}$"
+        return value
+
+    try:
+        gold = parse(prepare(reference))
+        answer = parse(prepare(prediction))
+        return bool(gold and answer and verify(gold, answer))
+    except Exception:
+        # A malformed model generation must count as incorrect, not crash a run.
+        return False
+
+
 def answers_equivalent(prediction: str, reference: str) -> bool:
-    """Compare answers by exact numeric value, falling back to normalized text."""
-    pred_value = parse_numeric_answer(prediction)
-    ref_value = parse_numeric_answer(reference)
+    """Compare numeric or symbolic answers with one shared verifier."""
+    pred_candidate = _verification_candidate(prediction)
+    ref_candidate = _verification_candidate(reference)
+    pred_value = _plain_numeric_value(pred_candidate)
+    ref_value = _plain_numeric_value(ref_candidate)
     if pred_value is not None and ref_value is not None:
         return pred_value == ref_value
-    return normalize_answer(prediction) == normalize_answer(reference)
+    if _math_verify_equivalent(pred_candidate, ref_candidate):
+        return True
+    pred_text = re.sub(r"\s+", "", pred_candidate).rstrip(".").casefold()
+    ref_text = re.sub(r"\s+", "", ref_candidate).rstrip(".").casefold()
+    return pred_text == ref_text
 
 
 def has_required_format(text: str) -> bool:

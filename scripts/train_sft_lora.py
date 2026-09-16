@@ -22,12 +22,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.run_manifest import write_manifest
+from src.project_config import DEFAULT_BASE_MODEL, lora_target_modules
 from src.sft_data import encode_response_only
 
 FULL_TRAIN_PATH = ROOT / "data" / "processed" / "gsm8k_train.jsonl"
 CORE_TRAIN_PATH = ROOT / "data" / "processed" / "gsm8k_train_core.jsonl"
 TRAIN_PATH = CORE_TRAIN_PATH if CORE_TRAIN_PATH.exists() else FULL_TRAIN_PATH
-MODEL_NAME = os.environ.get("MODEL_NAME", "Qwen/Qwen2.5-1.5B")
+MODEL_NAME = os.environ.get("MODEL_NAME", DEFAULT_BASE_MODEL)
 
 
 def load_jsonl(path: Path) -> list[dict]:
@@ -82,6 +83,11 @@ def main() -> None:
     parser.add_argument("--lora-alpha", type=int, default=16)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--shuffle", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--use-chat-template",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
     args = parser.parse_args()
 
     output_dir = ROOT / args.output_dir
@@ -112,22 +118,15 @@ def main() -> None:
         print(f"Continuing trainable LoRA adapter: {init_adapter}")
         model = PeftModel.from_pretrained(model, init_adapter, is_trainable=True)
     else:
-        # Adapt both attention and MLP projections for the initial SFT policy.
+        target_modules = lora_target_modules(MODEL_NAME)
+        print(f"LoRA target modules: {target_modules}")
         lora_config = LoraConfig(
             r=args.lora_rank,
             lora_alpha=args.lora_alpha,
             lora_dropout=0.05,
             bias="none",
             task_type="CAUSAL_LM",
-            target_modules=[
-                "q_proj",
-                "k_proj",
-                "v_proj",
-                "o_proj",
-                "gate_proj",
-                "up_proj",
-                "down_proj",
-            ],
+            target_modules=target_modules,
         )
         model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
@@ -144,7 +143,12 @@ def main() -> None:
 
     encoded, dropped = [], 0
     for row in rows:
-        item = encode_response_only(row, tokenizer, args.max_length)
+        item = encode_response_only(
+            row,
+            tokenizer,
+            args.max_length,
+            use_chat_template=args.use_chat_template,
+        )
         if item is None:
             dropped += 1
         else:
@@ -167,6 +171,7 @@ def main() -> None:
         dropped_overlength=dropped,
         objective="response_only_causal_lm",
         train_path=str(train_path),
+        lora_target_modules=lora_target_modules(MODEL_NAME),
     )
 
     training_args = TrainingArguments(

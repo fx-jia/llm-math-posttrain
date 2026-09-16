@@ -19,10 +19,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.run_manifest import write_manifest
+from src.project_config import DEFAULT_BASE_MODEL
 
 DPO_PATH = ROOT / "data" / "processed" / "dpo_pairs_sft.jsonl"
 
-MODEL_NAME = os.environ.get("MODEL_NAME", "Qwen/Qwen2.5-1.5B")
+MODEL_NAME = os.environ.get("MODEL_NAME", DEFAULT_BASE_MODEL)
 SFT_ADAPTER_DIR = os.environ.get("SFT_ADAPTER_DIR", str(ROOT / "outputs" / "sft_lora_r8_full"))
 
 

@@ -20,12 +20,13 @@ from src.math_verifier import (
     has_required_format,
     normalize_answer,
 )
-from src.prompts import build_math_prompt
+from src.project_config import DEFAULT_BASE_MODEL
+from src.prompts import build_math_prompt, render_prompt_for_model
 from src.run_manifest import write_manifest
 TEST_PATH = ROOT / "data" / "processed" / "gsm8k_test.jsonl"
 OUTPUT_DIR = ROOT / "outputs"
 
-MODEL_NAME = os.environ.get("MODEL_NAME", "Qwen/Qwen2.5-1.5B")
+MODEL_NAME = os.environ.get("MODEL_NAME", DEFAULT_BASE_MODEL)
 
 
 def load_jsonl(path: Path) -> list[dict]:
@@ -41,6 +42,11 @@ def main() -> None:
     parser.add_argument("--max-new-tokens", type=int, default=256)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--shuffle", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--use-chat-template",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
     args = parser.parse_args()
 
     adapter_dir = ROOT / args.adapter_dir
@@ -96,7 +102,11 @@ def main() -> None:
 
     with result_path.open("w", encoding="utf-8") as f:
         for idx, row in enumerate(rows, start=1):
-            prompt = build_math_prompt(row["question"])
+            prompt = render_prompt_for_model(
+                tokenizer,
+                build_math_prompt(row["question"]),
+                args.use_chat_template,
+            )
             inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
 
             if torch.cuda.is_available():

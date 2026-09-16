@@ -18,7 +18,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.math_verifier import answers_equivalent, extract_final_answer, has_required_format
-from src.prompts import build_math_prompt
+from src.project_config import DEFAULT_BASE_MODEL
+from src.prompts import build_math_prompt, render_prompt_for_model
 from src.run_manifest import write_manifest
 
 
@@ -30,7 +31,7 @@ DEFAULT_FRONTIER_PATH = ROOT / "data" / "processed" / "rlvr_frontier_sft.jsonl"
 DEFAULT_STATS_PATH = ROOT / "data" / "processed" / "rollout_stats_sft.jsonl"
 DEFAULT_RFT_PATH = ROOT / "data" / "processed" / "rft_correct_sft.jsonl"
 
-MODEL_NAME = os.environ.get("MODEL_NAME", "Qwen/Qwen2.5-1.5B")
+MODEL_NAME = os.environ.get("MODEL_NAME", DEFAULT_BASE_MODEL)
 ADAPTER_DIR = os.environ.get("SFT_ADAPTER_DIR", str(ROOT / "outputs" / "sft_lora_r8_full"))
 
 
@@ -64,6 +65,7 @@ def closest_length_pair(correct: list[dict], incorrect: list[dict]) -> tuple[dic
 
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--train-path", default=str(TRAIN_PATH.relative_to(ROOT)))
     parser.add_argument("--input-limit", type=int, default=800)
     parser.add_argument("--max-pairs", type=int, default=300)
     parser.add_argument("--num-candidates", type=int, default=8)
@@ -72,6 +74,11 @@ def main() -> None:
     parser.add_argument("--top-p", type=float, default=0.95)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--require-format", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--use-chat-template",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
     parser.add_argument("--pairs-output", default=str(DEFAULT_PAIR_PATH.relative_to(ROOT)))
     parser.add_argument("--frontier-output", default=str(DEFAULT_FRONTIER_PATH.relative_to(ROOT)))
     parser.add_argument("--stats-output", default=str(DEFAULT_STATS_PATH.relative_to(ROOT)))
@@ -108,7 +115,8 @@ def main() -> None:
     model = PeftModel.from_pretrained(base_model, ADAPTER_DIR)
     model.eval()
 
-    rows = load_jsonl(TRAIN_PATH)
+    train_path = resolve_path(args.train_path)
+    rows = load_jsonl(train_path)
     random.Random(args.seed).shuffle(rows)
     rows = rows[: args.input_limit]
 
@@ -125,7 +133,12 @@ def main() -> None:
         rft_path.open("w", encoding="utf-8") as rft_file,
     ):
         for processed, row in enumerate(rows, start=1):
-            prompt = build_math_prompt(row["question"])
+            question = row["question"]
+            prompt = render_prompt_for_model(
+                tokenizer,
+                build_math_prompt(question),
+                args.use_chat_template,
+            )
             inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
 
             with torch.no_grad():
@@ -178,6 +191,7 @@ def main() -> None:
                     json.dumps(
                         {
                             "id": row["id"],
+                            "question": question,
                             "prompt": prompt,
                             "answer": row["answer"],
                             "sft_pass_rate": pass_rate,
@@ -198,6 +212,7 @@ def main() -> None:
                         {
                             "id": row["id"],
                             "source": "same_policy_verified_correct",
+                            "question": question,
                             "prompt": prompt,
                             "completion": rft_choice["text"],
                             "answer": row["answer"],
@@ -216,6 +231,7 @@ def main() -> None:
                         {
                             "id": row["id"],
                             "source": "same_policy_verified_candidates",
+                            "question": question,
                             "prompt": prompt,
                             "chosen": chosen["text"],
                             "rejected": rejected["text"],
@@ -249,7 +265,7 @@ def main() -> None:
         vars(args),
         model_name=MODEL_NAME,
         adapter_dir=ADAPTER_DIR,
-        train_path=str(TRAIN_PATH),
+        train_path=str(train_path),
         processed_examples=processed,
         saved_pairs=pair_count,
         frontier_prompts=frontier_count,

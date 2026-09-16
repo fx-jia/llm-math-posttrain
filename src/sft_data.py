@@ -1,9 +1,14 @@
 """Dependency-free construction of response-only SFT token labels."""
 
-from src.prompts import build_math_completion, build_math_prompt
+from src.prompts import build_math_completion, build_math_prompt, render_prompt_for_model
 
 
-def encode_response_only(row: dict, tokenizer, max_length: int) -> dict | None:
+def encode_response_only(
+    row: dict,
+    tokenizer,
+    max_length: int,
+    use_chat_template: bool = False,
+) -> dict | None:
     """Tokenize prompt/completion separately and mask every prompt token."""
     if "prompt" in row and "completion" in row:
         prompt = row["prompt"]
@@ -12,6 +17,7 @@ def encode_response_only(row: dict, tokenizer, max_length: int) -> dict | None:
         prompt = build_math_prompt(row["question"])
         completion = build_math_completion(row["reasoning"], row["answer"])
 
+    prompt = render_prompt_for_model(tokenizer, prompt, use_chat_template)
     prompt_ids = tokenizer(prompt, add_special_tokens=True, truncation=False)["input_ids"]
     completion_ids = tokenizer(completion, add_special_tokens=False, truncation=False)["input_ids"]
     if tokenizer.eos_token_id is not None:

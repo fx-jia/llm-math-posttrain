@@ -7,11 +7,14 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
-MODEL_NAME = os.environ.get("MODEL_NAME", "Qwen/Qwen2.5-1.5B")
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.prompts import build_math_prompt
+from src.project_config import DEFAULT_BASE_MODEL
+from src.prompts import build_math_prompt, render_prompt_for_model
+
+
+MODEL_NAME = os.environ.get("MODEL_NAME", DEFAULT_BASE_MODEL)
 
 
 def main() -> None:
@@ -39,6 +42,7 @@ def main() -> None:
         "Natalia sold clips to 48 of her friends in April, and then she sold half as many clips in May. "
         "How many clips did Natalia sell altogether in April and May?"
     )
+    prompt = render_prompt_for_model(tokenizer, prompt)
 
     inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
 
