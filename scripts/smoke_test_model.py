@@ -10,11 +10,12 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.project_config import DEFAULT_BASE_MODEL
+from src.project_config import DEFAULT_BASE_MODEL, DEFAULT_MODEL_REVISION
 from src.prompts import build_math_prompt, render_prompt_for_model
 
 
 MODEL_NAME = os.environ.get("MODEL_NAME", DEFAULT_BASE_MODEL)
+MODEL_REVISION = os.environ.get("MODEL_REVISION", DEFAULT_MODEL_REVISION)
 
 
 def main() -> None:
@@ -25,6 +26,7 @@ def main() -> None:
     tokenizer = AutoTokenizer.from_pretrained(
         MODEL_NAME,
         trust_remote_code=True,
+        revision=MODEL_REVISION,
     )
 
     model = AutoModelForCausalLM.from_pretrained(
@@ -32,6 +34,7 @@ def main() -> None:
         torch_dtype=torch.bfloat16,
         device_map="auto",
         trust_remote_code=True,
+        revision=MODEL_REVISION,
     )
 
     print(f"tokenizer vocab size: {len(tokenizer)}")

@@ -18,21 +18,20 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.math_verifier import answers_equivalent, extract_final_answer, has_required_format
-from src.project_config import DEFAULT_BASE_MODEL
+from src.project_config import DEFAULT_BASE_MODEL, DEFAULT_MODEL_REVISION
 from src.prompts import build_math_prompt, render_prompt_for_model
 from src.run_manifest import write_manifest
 
 
-FULL_TRAIN_PATH = ROOT / "data" / "processed" / "gsm8k_train.jsonl"
-CORE_TRAIN_PATH = ROOT / "data" / "processed" / "gsm8k_train_core.jsonl"
-TRAIN_PATH = CORE_TRAIN_PATH if CORE_TRAIN_PATH.exists() else FULL_TRAIN_PATH
+TRAIN_PATH = ROOT / "data" / "processed" / "dapo_math_v3.jsonl"
 DEFAULT_PAIR_PATH = ROOT / "data" / "processed" / "dpo_pairs_sft.jsonl"
 DEFAULT_FRONTIER_PATH = ROOT / "data" / "processed" / "rlvr_frontier_sft.jsonl"
 DEFAULT_STATS_PATH = ROOT / "data" / "processed" / "rollout_stats_sft.jsonl"
 DEFAULT_RFT_PATH = ROOT / "data" / "processed" / "rft_correct_sft.jsonl"
 
 MODEL_NAME = os.environ.get("MODEL_NAME", DEFAULT_BASE_MODEL)
-ADAPTER_DIR = os.environ.get("SFT_ADAPTER_DIR", str(ROOT / "outputs" / "sft_lora_r8_full"))
+MODEL_REVISION = os.environ.get("MODEL_REVISION", DEFAULT_MODEL_REVISION)
+ADAPTER_DIR = os.environ.get("SFT_ADAPTER_DIR", str(ROOT / "outputs" / "sft_v3_seed42"))
 
 
 def resolve_path(value: str | Path) -> Path:
@@ -69,9 +68,10 @@ def main() -> None:
     parser.add_argument("--input-limit", type=int, default=800)
     parser.add_argument("--max-pairs", type=int, default=300)
     parser.add_argument("--num-candidates", type=int, default=8)
-    parser.add_argument("--max-new-tokens", type=int, default=256)
+    parser.add_argument("--max-new-tokens", type=int, default=4096)
     parser.add_argument("--temperature", type=float, default=0.9)
     parser.add_argument("--top-p", type=float, default=0.95)
+    parser.add_argument("--top-k", type=int, default=20)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--require-format", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument(
@@ -111,6 +111,7 @@ def main() -> None:
         dtype=torch.bfloat16,
         device_map="auto",
         trust_remote_code=True,
+        revision=MODEL_REVISION,
     )
     model = PeftModel.from_pretrained(base_model, ADAPTER_DIR)
     model.eval()
@@ -148,6 +149,7 @@ def main() -> None:
                     do_sample=True,
                     temperature=args.temperature,
                     top_p=args.top_p,
+                    top_k=args.top_k,
                     num_return_sequences=args.num_candidates,
                     pad_token_id=tokenizer.eos_token_id,
                 )
@@ -264,6 +266,7 @@ def main() -> None:
         ROOT,
         vars(args),
         model_name=MODEL_NAME,
+        model_revision=MODEL_REVISION,
         adapter_dir=ADAPTER_DIR,
         train_path=str(train_path),
         processed_examples=processed,

@@ -146,12 +146,11 @@ def _fraction_to_text(value: Fraction) -> str:
 
 def normalize_answer(text: str) -> str:
     """Return a stable representation used by logs and legacy callers."""
-    numeric = parse_numeric_answer(text)
+    candidate = _verification_candidate(text)
+    numeric = _plain_numeric_value(candidate)
     if numeric is not None:
         return _fraction_to_text(numeric)
-
-    candidate = extract_final_answer(text)
-    return candidate.strip().rstrip(".").casefold()
+    return re.sub(r"\s+", "", candidate).rstrip(".").casefold()
 
 
 def _verification_candidate(text: str) -> str:

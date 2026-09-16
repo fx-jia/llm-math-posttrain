@@ -8,6 +8,7 @@ DEFAULT_SAME_SIZE_MODEL = "Qwen/Qwen3.5-4B"
 DEFAULT_API_MODEL = "Qwen/Qwen3.5-9B"
 DEFAULT_CEILING_MODEL = "Qwen/Qwen3.5-27B"
 DEFAULT_API_BASE_URL = "https://api.together.xyz/v1"
+DEFAULT_MODEL_REVISION = "main"
 
 LEGACY_LORA_TARGET_MODULES = (
     "q_proj",

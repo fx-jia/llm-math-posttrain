@@ -20,6 +20,16 @@ class RunManifestTest(unittest.TestCase):
             self.assertIn(str(input_path), payload["input_file_sha256"])
             self.assertEqual(len(payload["input_file_sha256"][str(input_path)]), 64)
 
+    def test_manifest_hashes_lists_of_input_paths(self):
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_path = Path(temp_dir) / "eval.jsonl"
+            output_path = Path(temp_dir) / "manifest.json"
+            input_path.write_text('{"value": 2}\n', encoding="utf-8")
+            write_manifest(output_path, root, {"eval_paths": [str(input_path)]})
+            payload = json.loads(output_path.read_text(encoding="utf-8"))
+            self.assertIn(str(input_path), payload["input_file_sha256"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -11,7 +11,16 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 
-TRACKED_PACKAGES = ("torch", "transformers", "datasets", "peft", "trl", "accelerate")
+TRACKED_PACKAGES = (
+    "torch",
+    "transformers",
+    "datasets",
+    "peft",
+    "trl",
+    "accelerate",
+    "math-verify",
+    "openai",
+)
 
 
 def _package_versions() -> dict[str, str]:
@@ -48,13 +57,18 @@ def _file_sha256(path: Path) -> str:
 def _input_hashes(root: Path, values: dict) -> dict[str, str]:
     hashes = {}
     for key, value in values.items():
-        if not key.endswith("path") or not isinstance(value, (str, Path)):
+        if key.endswith("paths") and isinstance(value, (list, tuple)):
+            candidates = value
+        elif key.endswith("path") and isinstance(value, (str, Path)):
+            candidates = [value]
+        else:
             continue
-        path = Path(value)
-        if not path.is_absolute():
-            path = root / path
-        if path.is_file():
-            hashes[str(path)] = _file_sha256(path)
+        for candidate in candidates:
+            path = Path(candidate)
+            if not path.is_absolute():
+                path = root / path
+            if path.is_file():
+                hashes[str(path)] = _file_sha256(path)
     return hashes
 
 

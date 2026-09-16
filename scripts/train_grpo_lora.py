@@ -18,15 +18,15 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.rewards import correctness_reward, format_reward, length_reward
-from src.project_config import DEFAULT_BASE_MODEL
+from src.project_config import DEFAULT_BASE_MODEL, DEFAULT_MODEL_REVISION
 from src.run_manifest import write_manifest
 
 
-GRPO_PATH = ROOT / "data" / "processed" / "grpo_train.jsonl"
 FRONTIER_PATH = ROOT / "data" / "processed" / "rlvr_frontier_sft.jsonl"
 
 MODEL_NAME = os.environ.get("MODEL_NAME", DEFAULT_BASE_MODEL)
-SFT_ADAPTER_DIR = os.environ.get("SFT_ADAPTER_DIR", str(ROOT / "outputs" / "sft_lora_r8_full"))
+MODEL_REVISION = os.environ.get("MODEL_REVISION", DEFAULT_MODEL_REVISION)
+SFT_ADAPTER_DIR = os.environ.get("SFT_ADAPTER_DIR", str(ROOT / "outputs" / "sft_v3_seed42"))
 
 
 def load_jsonl(path: Path) -> list[dict]:
@@ -115,8 +115,8 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=1)
     parser.add_argument("--num-generations", type=int, default=4)
-    parser.add_argument("--max-prompt-length", type=int, default=384)
-    parser.add_argument("--max-completion-length", type=int, default=256)
+    parser.add_argument("--max-prompt-length", type=int, default=2048)
+    parser.add_argument("--max-completion-length", type=int, default=2048)
     parser.add_argument("--temperature", type=float, default=0.9)
     parser.add_argument("--learning-rate", type=float, default=1e-6)
     parser.add_argument("--beta", type=float, default=0.01)
@@ -143,12 +143,11 @@ def main() -> None:
     train_path = Path(args.train_path)
     if not train_path.is_absolute():
         train_path = ROOT / train_path
-    if not train_path.exists() and train_path == FRONTIER_PATH:
-        print(
-            f"Frontier dataset not found at {train_path}; falling back to {GRPO_PATH}. "
-            "Run build_dpo_pairs.py first for difficulty-aware RLVR."
+    if not train_path.exists():
+        raise FileNotFoundError(
+            f"RLVR data not found at {train_path}. Run build_dpo_pairs.py first; "
+            "V3 does not silently fall back to legacy prompts."
         )
-        train_path = GRPO_PATH
     rows = load_jsonl(train_path)
     if args.shuffle:
         random.Random(args.seed).shuffle(rows)
@@ -173,6 +172,7 @@ def main() -> None:
         dtype=torch.bfloat16,
         device_map="auto",
         trust_remote_code=True,
+        revision=MODEL_REVISION,
     )
     base_model.config.use_cache = False
 
@@ -189,6 +189,7 @@ def main() -> None:
         ROOT,
         vars(args),
         model_name=MODEL_NAME,
+        model_revision=MODEL_REVISION,
         sft_adapter_dir=SFT_ADAPTER_DIR,
         train_path=str(train_path),
         train_examples=len(dataset),

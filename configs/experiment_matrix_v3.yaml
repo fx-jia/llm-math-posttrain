@@ -1,0 +1,78 @@
+version: 3
+claim:
+  small_model: Qwen/Qwen3.5-4B-Base
+  objective: compute_efficient_math_posttraining
+  primary_benchmark: hmmt_feb_2026
+  target: match_or_exceed_qwen35_9b_under_fixed_evaluation
+
+models:
+  trainable_small:
+    name: Qwen/Qwen3.5-4B-Base
+    execution: local_lora
+  same_size_control:
+    name: Qwen/Qwen3.5-4B
+    execution: local_inference_only
+  primary_large_baseline:
+    name: Qwen/Qwen3.5-9B
+    execution: openai_compatible_api
+  optional_ceiling:
+    name: Qwen/Qwen3.5-27B
+    execution: openai_compatible_api
+
+data:
+  sft: open-r1/OpenR1-Math-220k
+  rlvr_prompts: open-r1/DAPO-Math-17k-Processed
+  decontamination_threshold: 0.8
+  dataset_revision: main
+
+benchmarks:
+  headline: [hmmt_feb_2026]
+  secondary: [aime_2026, apex_2025]
+  regression: [math_500]
+
+matched_evaluation:
+  samples_per_problem: 4
+  temperature: 1.0
+  top_p: 0.95
+  top_k: 20
+  max_new_tokens: 4096
+  seeds: [42, 43, 44]
+  metrics: [mean_sample_accuracy, pass_at_4, majority_at_4, completion_tokens]
+
+training:
+  common:
+    seeds: [42, 43, 44]
+    precision: bf16
+    lora_rank: 32
+    lora_alpha: 64
+    max_length: 4096
+  stages:
+    - id: base
+      train: false
+    - id: sft_response_only
+      objective: response_only_causal_lm
+      examples: 40000
+    - id: rft_verified
+      objective: response_only_causal_lm
+      source: same_policy_verified_correct
+    - id: dpo_hard_pairs
+      objective: dpo
+      source: same_policy_length_matched_pairs
+    - id: rlvr_grpo
+      objective: grpo
+      source: policy_frontier
+    - id: rlvr_dapo
+      objective: grpo
+      source: policy_frontier
+      loss_type: dapo
+      scale_rewards: none
+      epsilon: 0.2
+      epsilon_high: 0.28
+      mask_truncated_completions: true
+
+reporting_gates:
+  - no_train_eval_overlap_above_threshold
+  - same_prompt_and_decoding_protocol
+  - all_claimed_runs_have_manifests
+  - improvement_repeats_on_at_least_two_seeds
+  - no_claim_from_external_leaderboard_scores

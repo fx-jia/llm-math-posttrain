@@ -20,13 +20,14 @@ from src.math_verifier import (
     has_required_format,
     normalize_answer,
 )
-from src.project_config import DEFAULT_BASE_MODEL
+from src.project_config import DEFAULT_BASE_MODEL, DEFAULT_MODEL_REVISION
 from src.prompts import build_math_prompt, render_prompt_for_model
 from src.run_manifest import write_manifest
-TEST_PATH = ROOT / "data" / "processed" / "gsm8k_test.jsonl"
+TEST_PATH = ROOT / "data" / "processed" / "hmmt_feb_2026.jsonl"
 OUTPUT_DIR = ROOT / "outputs"
 
 MODEL_NAME = os.environ.get("MODEL_NAME", DEFAULT_BASE_MODEL)
+MODEL_REVISION = os.environ.get("MODEL_REVISION", DEFAULT_MODEL_REVISION)
 
 
 def load_jsonl(path: Path) -> list[dict]:
@@ -39,7 +40,7 @@ def main() -> None:
     parser.add_argument("--adapter-dir", type=str, required=True)
     parser.add_argument("--data-path", default=str(TEST_PATH.relative_to(ROOT)))
     parser.add_argument("--limit", type=int, default=None)
-    parser.add_argument("--max-new-tokens", type=int, default=256)
+    parser.add_argument("--max-new-tokens", type=int, default=4096)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--shuffle", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument(
@@ -74,6 +75,7 @@ def main() -> None:
         dtype=torch.bfloat16,
         device_map="auto",
         trust_remote_code=True,
+        revision=MODEL_REVISION,
     )
 
     print(f"Loading LoRA adapter: {adapter_dir}")
@@ -89,6 +91,7 @@ def main() -> None:
         ROOT,
         vars(args),
         model_name=MODEL_NAME,
+        model_revision=MODEL_REVISION,
         adapter_dir=str(adapter_dir),
         examples=len(rows),
         decoding="greedy",

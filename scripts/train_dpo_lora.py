@@ -19,12 +19,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.run_manifest import write_manifest
-from src.project_config import DEFAULT_BASE_MODEL
+from src.project_config import DEFAULT_BASE_MODEL, DEFAULT_MODEL_REVISION
 
 DPO_PATH = ROOT / "data" / "processed" / "dpo_pairs_sft.jsonl"
 
 MODEL_NAME = os.environ.get("MODEL_NAME", DEFAULT_BASE_MODEL)
-SFT_ADAPTER_DIR = os.environ.get("SFT_ADAPTER_DIR", str(ROOT / "outputs" / "sft_lora_r8_full"))
+MODEL_REVISION = os.environ.get("MODEL_REVISION", DEFAULT_MODEL_REVISION)
+SFT_ADAPTER_DIR = os.environ.get("SFT_ADAPTER_DIR", str(ROOT / "outputs" / "sft_v3_seed42"))
 
 
 def load_jsonl(path: Path) -> list[dict]:
@@ -87,8 +88,8 @@ def main() -> None:
     parser.add_argument("--train-limit", type=int, default=200)
     parser.add_argument("--output-dir", type=str, default="outputs/dpo_smoke")
     parser.add_argument("--epochs", type=float, default=1.0)
-    parser.add_argument("--max-length", type=int, default=768)
-    parser.add_argument("--max-prompt-length", type=int, default=384)
+    parser.add_argument("--max-length", type=int, default=4096)
+    parser.add_argument("--max-prompt-length", type=int, default=2048)
     parser.add_argument("--learning-rate", type=float, default=5e-6)
     parser.add_argument("--beta", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=42)
@@ -136,6 +137,7 @@ def main() -> None:
         dtype=torch.bfloat16,
         device_map="auto",
         trust_remote_code=True,
+        revision=MODEL_REVISION,
     )
     policy_base.config.use_cache = False
     model = PeftModel.from_pretrained(policy_base, SFT_ADAPTER_DIR, is_trainable=True)
@@ -148,6 +150,7 @@ def main() -> None:
         dtype=torch.bfloat16,
         device_map="auto",
         trust_remote_code=True,
+        revision=MODEL_REVISION,
     )
     ref_base.config.use_cache = False
     # 参考模型固定在 SFT 起点，用于约束策略不要偏离过快。
@@ -159,6 +162,7 @@ def main() -> None:
         ROOT,
         vars(args),
         model_name=MODEL_NAME,
+        model_revision=MODEL_REVISION,
         sft_adapter_dir=SFT_ADAPTER_DIR,
         train_path=str(train_path),
         train_examples=len(dataset),

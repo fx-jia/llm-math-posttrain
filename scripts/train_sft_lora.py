@@ -1,4 +1,4 @@
-"""使用 GSM8K 推理文本对因果语言模型进行 LoRA 监督微调。"""
+"""使用数学推理轨迹对因果语言模型进行 response-only LoRA SFT。"""
 
 import argparse
 import json
@@ -22,13 +22,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.run_manifest import write_manifest
-from src.project_config import DEFAULT_BASE_MODEL, lora_target_modules
+from src.project_config import DEFAULT_BASE_MODEL, DEFAULT_MODEL_REVISION, lora_target_modules
 from src.sft_data import encode_response_only
 
-FULL_TRAIN_PATH = ROOT / "data" / "processed" / "gsm8k_train.jsonl"
-CORE_TRAIN_PATH = ROOT / "data" / "processed" / "gsm8k_train_core.jsonl"
-TRAIN_PATH = CORE_TRAIN_PATH if CORE_TRAIN_PATH.exists() else FULL_TRAIN_PATH
+TRAIN_PATH = ROOT / "data" / "processed" / "openr1_sft_v3.jsonl"
 MODEL_NAME = os.environ.get("MODEL_NAME", DEFAULT_BASE_MODEL)
+MODEL_REVISION = os.environ.get("MODEL_REVISION", DEFAULT_MODEL_REVISION)
 
 
 def load_jsonl(path: Path) -> list[dict]:
@@ -75,8 +74,8 @@ def main() -> None:
         help="Optional LoRA adapter to continue training (used by the RFT baseline).",
     )
     parser.add_argument("--train-limit", type=int, default=256)
-    parser.add_argument("--output-dir", type=str, default="outputs/sft_smoke")
-    parser.add_argument("--max-length", type=int, default=768)
+    parser.add_argument("--output-dir", type=str, default="outputs/sft_v3_smoke")
+    parser.add_argument("--max-length", type=int, default=4096)
     parser.add_argument("--epochs", type=float, default=1.0)
     parser.add_argument("--learning-rate", type=float, default=2e-4)
     parser.add_argument("--lora-rank", type=int, default=8)
@@ -100,7 +99,10 @@ def main() -> None:
             init_adapter = ROOT / init_adapter
     tokenizer_source = init_adapter or MODEL_NAME
     print(f"Loading tokenizer: {tokenizer_source}")
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, trust_remote_code=True)
+    tokenizer_kwargs = {"trust_remote_code": True}
+    if not init_adapter:
+        tokenizer_kwargs["revision"] = MODEL_REVISION
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, **tokenizer_kwargs)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "right"
@@ -111,6 +113,7 @@ def main() -> None:
         dtype=torch.bfloat16,
         device_map="auto",
         trust_remote_code=True,
+        revision=MODEL_REVISION,
     )
     model.config.use_cache = False
 
@@ -167,6 +170,7 @@ def main() -> None:
         ROOT,
         vars(args),
         model_name=MODEL_NAME,
+        model_revision=MODEL_REVISION,
         train_examples=len(encoded),
         dropped_overlength=dropped,
         objective="response_only_causal_lm",

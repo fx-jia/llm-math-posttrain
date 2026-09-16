@@ -40,6 +40,7 @@ class MathVerifierTest(unittest.TestCase):
         self.assertTrue(
             answers_equivalent(r"Final Answer: \sqrt{3}", r"\sqrt{3}")
         )
+        self.assertEqual(normalize_answer(r"Final Answer: \sqrt{3}"), r"\sqrt{3}")
 
 
 if __name__ == "__main__":

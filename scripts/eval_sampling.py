@@ -18,15 +18,16 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.math_verifier import answers_equivalent, normalize_answer
-from src.project_config import DEFAULT_BASE_MODEL
+from src.project_config import DEFAULT_BASE_MODEL, DEFAULT_MODEL_REVISION
 from src.prompts import build_math_prompt, render_prompt_for_model
 from src.run_manifest import write_manifest
 from src.statistics import estimate_pass_at_k
 
 
-TEST_PATH = ROOT / "data" / "processed" / "gsm8k_test.jsonl"
+TEST_PATH = ROOT / "data" / "processed" / "hmmt_feb_2026.jsonl"
 OUTPUT_DIR = ROOT / "outputs"
 MODEL_NAME = os.environ.get("MODEL_NAME", DEFAULT_BASE_MODEL)
+MODEL_REVISION = os.environ.get("MODEL_REVISION", DEFAULT_MODEL_REVISION)
 
 
 def load_jsonl(path: Path) -> list[dict]:
@@ -41,9 +42,10 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=100)
     parser.add_argument("--num-samples", type=int, default=8)
     parser.add_argument("--pass-k", type=int, nargs="+", default=[1, 4, 8])
-    parser.add_argument("--max-new-tokens", type=int, default=256)
-    parser.add_argument("--temperature", type=float, default=0.8)
+    parser.add_argument("--max-new-tokens", type=int, default=4096)
+    parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top-p", type=float, default=0.95)
+    parser.add_argument("--top-k", type=int, default=20)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
         "--use-chat-template",
@@ -71,7 +73,10 @@ def main() -> None:
             adapter_dir = ROOT / adapter_dir
 
     tokenizer_source = adapter_dir or MODEL_NAME
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, trust_remote_code=True)
+    tokenizer_kwargs = {"trust_remote_code": True}
+    if adapter_dir is None:
+        tokenizer_kwargs["revision"] = MODEL_REVISION
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, **tokenizer_kwargs)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -80,6 +85,7 @@ def main() -> None:
         dtype=torch.bfloat16,
         device_map="auto",
         trust_remote_code=True,
+        revision=MODEL_REVISION,
     )
     model = PeftModel.from_pretrained(base_model, adapter_dir) if adapter_dir else base_model
     model.eval()
@@ -93,6 +99,7 @@ def main() -> None:
         ROOT,
         vars(args),
         model_name=MODEL_NAME,
+        model_revision=MODEL_REVISION,
         adapter_dir=str(adapter_dir) if adapter_dir else None,
         examples=len(rows),
         decoding="sampling",
@@ -122,6 +129,7 @@ def main() -> None:
                     do_sample=True,
                     temperature=args.temperature,
                     top_p=args.top_p,
+                    top_k=args.top_k,
                     num_return_sequences=args.num_samples,
                     pad_token_id=tokenizer.eos_token_id,
                 )
